@@ -252,11 +252,13 @@ if analyze_button:
                         col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
-                            # Clickable headline
-                            if item.get('url'):
+                            # Clickable headline if URL available, otherwise just show headline
+                            if item.get('url') and item['url'].startswith('http'):
                                 st.markdown(f"**[{item['headline']}]({item['url']})**")
                             else:
                                 st.markdown(f"**{item['headline']}**")
+                                if item['source'] == 'Google News':
+                                    st.caption(f"⚠️ Link unavailable - Google News redirect")
                             st.caption(f"{item['ticker']} | {item['source']} | {item.get('date', 'N/A')}")
                         
                         with col2:
