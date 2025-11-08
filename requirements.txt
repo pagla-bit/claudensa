@@ -1,8 +1,10 @@
-streamlit==1.31.0
-pandas==2.1.4
-requests==2.31.0
-beautifulsoup4==4.12.3
-vaderSentiment==3.3.2
-transformers==4.36.2
-torch==2.1.2
-lxml==5.1.0
+streamlit
+pandas
+numpy
+requests
+beautifulsoup4
+vaderSentiment
+transformers
+torch --index-url https://download.pytorch.org/whl/cpu
+yfinance
+lxml
