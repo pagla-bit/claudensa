@@ -2,7 +2,7 @@ from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from transformers import AutoTokenizer, AutoModelForSequenceClassification
 import torch
 from typing import Dict
-from news_scraper import fetch_article_content
+import numpy as np
 
 # Initialize VADER
 vader_analyzer = SentimentIntensityAnalyzer()
@@ -13,126 +13,114 @@ finbert_model = None
 
 
 def load_finbert():
-    """Lazy load FinBERT model to save memory"""
+    """
+    Lazy load FinBERT model to save startup time
+    """
     global finbert_tokenizer, finbert_model
     
     if finbert_tokenizer is None or finbert_model is None:
         finbert_tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
         finbert_model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
-        finbert_model.eval()  # Set to evaluation mode
+        finbert_model.eval()
 
 
-def analyze_vader(text: str) -> Dict:
+def analyze_vader_sentiment(text: str) -> Dict:
     """
     Analyze sentiment using VADER
-    
-    Args:
-        text: Text to analyze
-    
-    Returns:
-        Dictionary with sentiment scores and label
+    Returns: {'label': 'positive'|'negative'|'neutral', 'compound': score}
     """
-    scores = vader_analyzer.polarity_scores(text)
+    if not text or not text.strip():
+        return {'label': 'neutral', 'compound': 0.0}
     
-    # Determine label based on compound score
+    scores = vader_analyzer.polarity_scores(text)
     compound = scores['compound']
+    
+    # Classify based on compound score
     if compound >= 0.05:
-        label = 'Positive'
+        label = 'positive'
     elif compound <= -0.05:
-        label = 'Negative'
+        label = 'negative'
     else:
-        label = 'Neutral'
+        label = 'neutral'
     
     return {
-        'pos': scores['pos'],
-        'neg': scores['neg'],
-        'neu': scores['neu'],
+        'label': label,
         'compound': compound,
-        'label': label
+        'pos': scores['pos'],
+        'neu': scores['neu'],
+        'neg': scores['neg']
     }
 
 
-def analyze_finbert(text: str) -> Dict:
+def analyze_finbert_sentiment(text: str) -> Dict:
     """
     Analyze sentiment using FinBERT
-    
-    Args:
-        text: Text to analyze
-    
-    Returns:
-        Dictionary with sentiment scores and label
+    Returns: {'label': 'positive'|'negative'|'neutral', 'score': confidence}
     """
+    if not text or not text.strip():
+        return {'label': 'neutral', 'score': 0.0}
+    
+    # Load model if not already loaded
     load_finbert()
     
-    # Tokenize and prepare input
-    inputs = finbert_tokenizer(
-        text,
-        return_tensors="pt",
-        truncation=True,
-        max_length=512,
-        padding=True
-    )
+    # Truncate text if too long (FinBERT has 512 token limit)
+    max_length = 512
     
-    # Get prediction
-    with torch.no_grad():
-        outputs = finbert_model(**inputs)
-        predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
-    
-    # FinBERT outputs: [positive, negative, neutral]
-    scores = predictions[0].tolist()
-    
-    # Determine label
-    label_idx = scores.index(max(scores))
-    labels = ['Positive', 'Negative', 'Neutral']
-    label = labels[label_idx]
-    
-    return {
-        'pos': scores[0],
-        'neg': scores[1],
-        'neu': scores[2],
-        'label': label
-    }
+    try:
+        # Tokenize
+        inputs = finbert_tokenizer(
+            text,
+            return_tensors="pt",
+            truncation=True,
+            max_length=max_length,
+            padding=True
+        )
+        
+        # Get prediction
+        with torch.no_grad():
+            outputs = finbert_model(**inputs)
+            predictions = torch.nn.functional.softmax(outputs.logits, dim=-1)
+        
+        # FinBERT labels: 0=positive, 1=negative, 2=neutral
+        probs = predictions[0].numpy()
+        predicted_class = np.argmax(probs)
+        confidence = float(probs[predicted_class])
+        
+        label_map = {0: 'positive', 1: 'negative', 2: 'neutral'}
+        label = label_map[predicted_class]
+        
+        return {
+            'label': label,
+            'score': confidence,
+            'positive': float(probs[0]),
+            'negative': float(probs[1]),
+            'neutral': float(probs[2])
+        }
+        
+    except Exception as e:
+        print(f"Error in FinBERT analysis: {str(e)}")
+        return {'label': 'neutral', 'score': 0.0}
 
 
-def analyze_sentiment(article: Dict, use_vader: bool = True, use_finbert: bool = True, 
-                     analyze_content: bool = False) -> Dict:
+def batch_analyze_vader(texts: list) -> list:
     """
-    Analyze sentiment of an article using specified methods
-    
-    Args:
-        article: Article dictionary with headline, link, etc.
-        use_vader: Whether to use VADER analysis
-        use_finbert: Whether to use FinBERT analysis
-        analyze_content: Whether to fetch and analyze full article content
-    
-    Returns:
-        Article dictionary enriched with sentiment analysis results
+    Batch analyze multiple texts with VADER
     """
-    result = article.copy()
+    return [analyze_vader_sentiment(text) for text in texts]
+
+
+def batch_analyze_finbert(texts: list, batch_size: int = 8) -> list:
+    """
+    Batch analyze multiple texts with FinBERT for efficiency
+    """
+    results = []
     
-    # Determine what text to analyze
-    headline = article.get('headline', '')
+    # Load model once
+    load_finbert()
     
-    if analyze_content:
-        content = fetch_article_content(article.get('link', ''))
-        # Combine headline and content, or use content if available
-        text_to_analyze = f"{headline}. {content}" if content else headline
-    else:
-        text_to_analyze = headline
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i:i + batch_size]
+        for text in batch:
+            results.append(analyze_finbert_sentiment(text))
     
-    # Perform sentiment analysis
-    if use_vader:
-        try:
-            result['vader_sentiment'] = analyze_vader(text_to_analyze)
-        except Exception as e:
-            print(f"VADER analysis error: {str(e)}")
-            result['vader_sentiment'] = None
-    
-    if use_finbert:
-        try:
-            result['finbert_sentiment'] = analyze_finbert(text_to_analyze)
-        except Exception as e:
-            print(f"FinBERT analysis error: {str(e)}")
-            result['finbert_sentiment'] = None
-    
-    return result
+    return results
