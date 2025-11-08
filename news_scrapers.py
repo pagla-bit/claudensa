@@ -191,6 +191,7 @@ def scrape_yahoo(ticker: str, max_articles: int = 5) -> List[Dict]:
 def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
     """
     Scrape news from Google News
+    Note: Google News URLs may redirect through Google's servers
     """
     news_items = []
     
@@ -212,34 +213,40 @@ def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
                 break
             
             try:
-                # Get headline
-                headline_tag = article.find('a', {'class': 'JtKRv'})
+                # Get headline and link
+                headline_tag = article.find('a')
                 if not headline_tag:
-                    headline_tag = article.find('h3') or article.find('h4')
+                    continue
                 
-                if headline_tag:
-                    headline = headline_tag.text.strip()
-                    article_url = headline_tag.get('href', '')
-                    
-                    # Skip if headline too short
-                    if len(headline) < 10:
-                        continue
-                    
-                    # Fix Google News redirect URLs
-                    if article_url.startswith('./'):
-                        article_url = f"https://news.google.com{article_url[1:]}"
-                    
-                    # Get date/time
-                    time_tag = article.find('time')
-                    date_text = time_tag.text.strip() if time_tag else 'Recent'
-                    
-                    news_items.append({
-                        'source': 'Google News',
-                        'headline': headline,
-                        'date': date_text,
-                        'url': article_url,
-                        'content': ''  # Google News articles are behind redirects, harder to scrape
-                    })
+                headline = headline_tag.text.strip()
+                article_url = headline_tag.get('href', '')
+                
+                # Skip if headline too short
+                if len(headline) < 10:
+                    continue
+                
+                # Handle Google News URLs
+                final_url = ''
+                if article_url.startswith('./articles/'):
+                    # Google News article - convert to full URL
+                    final_url = f"https://news.google.com{article_url[1:]}"
+                elif article_url.startswith('./'):
+                    final_url = f"https://news.google.com{article_url[1:]}"
+                elif article_url.startswith('http'):
+                    final_url = article_url
+                
+                # Get date/time
+                time_tag = article.find('time')
+                date_text = time_tag.text.strip() if time_tag else 'Recent'
+                
+                # Add article with or without URL
+                news_items.append({
+                    'source': 'Google News',
+                    'headline': headline,
+                    'date': date_text,
+                    'url': final_url if final_url.startswith('http') else '',  # Only include valid URLs
+                    'content': ''
+                })
             except Exception as e:
                 continue
         
