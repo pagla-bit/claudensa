@@ -6,7 +6,7 @@ from typing import List, Dict, Tuple
 import concurrent.futures
 from functools import lru_cache
 
-# Import custom modules (we'll create these)
+# Import custom modules
 from news_scrapers import scrape_finviz, scrape_yahoo, scrape_google_news
 from sentiment_analyzer import analyze_vader_sentiment, analyze_finbert_sentiment
 from utils import validate_ticker, format_results
@@ -23,6 +23,23 @@ if 'results_history' not in st.session_state:
     st.session_state.results_history = []
 if 'cache' not in st.session_state:
     st.session_state.cache = {}
+
+# Helper function for sentiment indicators
+def get_sentiment_indicator(sentiment: str) -> str:
+    """Return colored ball emoji for sentiment"""
+    if sentiment == 'positive':
+        return '🟢'
+    elif sentiment == 'negative':
+        return '🔴'
+    else:
+        return '🟡'
+
+# Helper function to create clickable links
+def make_clickable(url, text):
+    """Create HTML for clickable link"""
+    if url and url.startswith('http'):
+        return f'<a href="{url}" target="_blank">{text}</a>'
+    return text
 
 # Title and description
 st.title("📈 Stock News Sentiment Analyzer")
@@ -44,6 +61,16 @@ with st.sidebar:
     use_finviz = st.checkbox("Finviz.com", value=True)
     use_yahoo = st.checkbox("Yahoo Finance", value=True)
     use_google = st.checkbox("Google News", value=True)
+    
+    # News count selection
+    st.subheader("News Count")
+    news_per_source = st.slider(
+        "Articles per ticker per source:",
+        min_value=1,
+        max_value=10,
+        value=5,
+        help="Number of latest news articles to fetch from each source"
+    )
     
     # Sentiment analysis options
     st.subheader("Analysis Options")
@@ -77,7 +104,7 @@ if analyze_button:
         if not any([use_finviz, use_yahoo, use_google]):
             st.error("Please select at least one news source")
         else:
-            st.info(f"Analyzing {len(tickers)} ticker(s) from {sum([use_finviz, use_yahoo, use_google])} source(s)...")
+            st.info(f"Analyzing {len(tickers)} ticker(s) from {sum([use_finviz, use_yahoo, use_google])} source(s)... ({news_per_source} articles per source)")
             
             # Create progress tracking
             progress_bar = st.progress(0)
@@ -105,14 +132,14 @@ if analyze_button:
                 
                 # Scrape news from each source
                 for source_name, scraper_func in sources:
-                    cache_key = f"{ticker}_{source_name}_{datetime.now().strftime('%Y%m%d%H%M')[:11]}"  # Cache per 10 min
+                    cache_key = f"{ticker}_{source_name}_{news_per_source}_{datetime.now().strftime('%Y%m%d%H%M')[:11]}"  # Cache per 10 min
                     
                     # Check cache
                     if cache_key in st.session_state.cache:
                         news_items = st.session_state.cache[cache_key]
                     else:
                         try:
-                            news_items = scraper_func(ticker, max_articles=5)
+                            news_items = scraper_func(ticker, max_articles=news_per_source)
                             st.session_state.cache[cache_key] = news_items
                         except Exception as e:
                             st.warning(f"Error scraping {source_name} for {ticker}: {str(e)}")
@@ -210,9 +237,50 @@ if analyze_button:
                 # Detailed results
                 st.header("📰 Detailed News Analysis")
                 
-                # Create detailed DataFrame
+                # Ticker filter for detailed view
+                selected_ticker = st.selectbox(
+                    "Filter by ticker:",
+                    ['All'] + tickers
+                )
+                
+                # Filter results
+                if selected_ticker != 'All':
+                    filtered_results = [r for r in all_results if r['ticker'] == selected_ticker]
+                else:
+                    filtered_results = all_results
+                
+                # Create detailed display with HTML for clickable links and sentiment indicators
+                for item in filtered_results:
+                    with st.container():
+                        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                        
+                        with col1:
+                            # Clickable headline
+                            if item.get('url'):
+                                st.markdown(f"**[{item['headline']}]({item['url']})**")
+                            else:
+                                st.markdown(f"**{item['headline']}**")
+                            st.caption(f"{item['ticker']} | {item['source']} | {item.get('date', 'N/A')}")
+                        
+                        with col2:
+                            st.markdown("**VADER**")
+                            vader_indicator = get_sentiment_indicator(item['vader_sentiment'])
+                            st.markdown(f"{vader_indicator} {item['vader_score']:.3f}")
+                        
+                        with col3:
+                            st.markdown("**FinBERT**")
+                            finbert_indicator = get_sentiment_indicator(item['finbert_sentiment'])
+                            st.markdown(f"{finbert_indicator} {item['finbert_score']:.3f}")
+                        
+                        with col4:
+                            if item.get('url'):
+                                st.link_button("Open", item['url'], use_container_width=True)
+                        
+                        st.divider()
+                
+                # Also provide downloadable detailed CSV
                 detailed_data = []
-                for item in all_results:
+                for item in filtered_results:
                     detailed_data.append({
                         'Ticker': item['ticker'],
                         'Source': item['source'],
@@ -227,21 +295,8 @@ if analyze_button:
                 
                 detailed_df = pd.DataFrame(detailed_data)
                 
-                # Ticker filter for detailed view
-                selected_ticker = st.selectbox(
-                    "Filter by ticker:",
-                    ['All'] + tickers
-                )
-                
-                if selected_ticker != 'All':
-                    filtered_df = detailed_df[detailed_df['Ticker'] == selected_ticker]
-                else:
-                    filtered_df = detailed_df
-                
-                st.dataframe(filtered_df, use_container_width=True)
-                
                 # Download detailed results
-                csv_detailed = filtered_df.to_csv(index=False)
+                csv_detailed = detailed_df.to_csv(index=False)
                 st.download_button(
                     label="📥 Download Detailed Results as CSV",
                     data=csv_detailed,
