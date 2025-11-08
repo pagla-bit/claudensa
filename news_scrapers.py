@@ -62,36 +62,67 @@ def scrape_finviz(ticker: str, max_articles: int = 5) -> List[Dict]:
 
 def scrape_yahoo(ticker: str, max_articles: int = 5) -> List[Dict]:
     """
-    Scrape news from Yahoo Finance
+    Scrape news from Yahoo Finance - Updated for 2024 structure
     """
     news_items = []
     
     try:
-        url = f"https://finance.yahoo.com/quote/{ticker}/news"
+        url = f"https://finance.yahoo.com/quote/{ticker}"
         response = requests.get(url, headers=HEADERS, timeout=10)
         response.raise_for_status()
         
         soup = BeautifulSoup(response.content, 'html.parser')
         
-        # Yahoo Finance news structure
-        articles = soup.find_all('h3', limit=max_articles)
+        # Yahoo Finance uses various div structures for news
+        # Try multiple selectors to find news items
+        news_containers = []
         
-        for article in articles:
-            try:
-                link = article.find('a')
-                if link:
+        # Look for news sections
+        selectors = [
+            'div[data-test="news-stream"]',
+            'div.stream-items',
+            'div.Mb\\(20px\\)',
+            'li.js-stream-content'
+        ]
+        
+        for selector in selectors:
+            containers = soup.select(selector)
+            if containers:
+                news_containers.extend(containers[:max_articles * 2])  # Get extra in case some fail
+                break
+        
+        # If no specific news containers, look for article/h3 tags
+        if not news_containers:
+            # Find all h3 tags that might contain news
+            h3_tags = soup.find_all('h3')
+            for h3 in h3_tags[:max_articles * 2]:
+                link = h3.find('a')
+                if link and link.get('href'):
                     headline = link.text.strip()
                     article_url = link.get('href', '')
                     
                     # Make URL absolute if relative
                     if article_url.startswith('/'):
                         article_url = f"https://finance.yahoo.com{article_url}"
+                    elif not article_url.startswith('http'):
+                        continue
                     
-                    # Try to get date (Yahoo's structure varies)
+                    # Skip if not a valid URL
+                    if not article_url or article_url == '#':
+                        continue
+                    
+                    # Try to get date from nearby elements
                     date_text = 'Recent'
+                    parent = h3.find_parent()
+                    if parent:
+                        time_elem = parent.find('time')
+                        if time_elem:
+                            date_text = time_elem.text.strip()
                     
                     # Try to fetch content
-                    content = fetch_article_content(article_url) if article_url else ''
+                    content = ''
+                    if article_url.startswith('http'):
+                        content = fetch_article_content(article_url)
                     
                     news_items.append({
                         'source': 'Yahoo Finance',
@@ -100,15 +131,61 @@ def scrape_yahoo(ticker: str, max_articles: int = 5) -> List[Dict]:
                         'url': article_url,
                         'content': content
                     })
-            except Exception as e:
-                continue
+                    
+                    if len(news_items) >= max_articles:
+                        break
+        else:
+            # Process news containers
+            for container in news_containers:
+                if len(news_items) >= max_articles:
+                    break
+                
+                try:
+                    # Find headline and link
+                    link = container.find('a')
+                    if not link:
+                        continue
+                    
+                    headline = link.text.strip()
+                    article_url = link.get('href', '')
+                    
+                    # Skip empty headlines
+                    if not headline or len(headline) < 10:
+                        continue
+                    
+                    # Make URL absolute if relative
+                    if article_url.startswith('/'):
+                        article_url = f"https://finance.yahoo.com{article_url}"
+                    elif not article_url.startswith('http'):
+                        continue
+                    
+                    # Try to get date
+                    date_text = 'Recent'
+                    time_elem = container.find('time')
+                    if time_elem:
+                        date_text = time_elem.text.strip()
+                    
+                    # Try to fetch content
+                    content = ''
+                    if article_url.startswith('http'):
+                        content = fetch_article_content(article_url)
+                    
+                    news_items.append({
+                        'source': 'Yahoo Finance',
+                        'headline': headline,
+                        'date': date_text,
+                        'url': article_url,
+                        'content': content
+                    })
+                except Exception as e:
+                    continue
         
         time.sleep(0.5)
         
     except Exception as e:
         print(f"Error scraping Yahoo Finance for {ticker}: {str(e)}")
     
-    return news_items
+    return news_items[:max_articles]
 
 
 def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
@@ -128,9 +205,12 @@ def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
         soup = BeautifulSoup(response.content, 'html.parser')
         
         # Google News articles
-        articles = soup.find_all('article', limit=max_articles)
+        articles = soup.find_all('article', limit=max_articles * 2)
         
         for article in articles:
+            if len(news_items) >= max_articles:
+                break
+            
             try:
                 # Get headline
                 headline_tag = article.find('a', {'class': 'JtKRv'})
@@ -140,6 +220,10 @@ def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
                 if headline_tag:
                     headline = headline_tag.text.strip()
                     article_url = headline_tag.get('href', '')
+                    
+                    # Skip if headline too short
+                    if len(headline) < 10:
+                        continue
                     
                     # Fix Google News redirect URLs
                     if article_url.startswith('./'):
@@ -172,7 +256,7 @@ def fetch_article_content(url: str, max_length: int = 1000) -> str:
     Attempt to fetch article content from URL
     Limited to first max_length characters to avoid overload
     """
-    if not url or url.startswith('#'):
+    if not url or url.startswith('#') or not url.startswith('http'):
         return ''
     
     try:
