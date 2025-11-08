@@ -1,84 +1,83 @@
 import re
-from typing import Dict
-
+from typing import List
 
 def validate_ticker(ticker: str) -> bool:
     """
-    Validate ticker symbol format
-    
-    Args:
-        ticker: Stock ticker symbol
-    
-    Returns:
-        True if valid format, False otherwise
+    Simple validation if a ticker symbol is valid format
+    Returns True if ticker appears valid (basic check)
     """
-    # Basic validation: 1-5 uppercase letters
-    pattern = r'^[A-Z]{1,5}$'
-    return bool(re.match(pattern, ticker.upper()))
+    if not ticker or not isinstance(ticker, str):
+        return False
+    
+    # Basic validation: 1-5 characters, alphanumeric
+    ticker = ticker.strip().upper()
+    if len(ticker) < 1 or len(ticker) > 5:
+        return False
+    
+    # Allow letters, numbers, dots, and hyphens
+    if not re.match(r'^[A-Z0-9.\-]+$', ticker):
+        return False
+    
+    return True
 
 
-def calculate_sentiment_ratio(row: Dict, use_vader: bool, use_finbert: bool) -> float:
+def clean_ticker(ticker: str) -> str:
     """
-    Calculate sentiment ratio for sorting
-    Ratio = (Positive) / (Positive + Negative + 1)
-    
-    Args:
-        row: DataFrame row with sentiment counts
-        use_vader: Whether VADER was used
-        use_finbert: Whether FinBERT was used
-    
-    Returns:
-        Sentiment ratio score
+    Clean and format ticker symbol
     """
-    total_pos = 0
-    total_neg = 0
+    if not ticker:
+        return ""
     
-    if use_vader:
-        total_pos += row.get('VADER_Positive', 0)
-        total_neg += row.get('VADER_Negative', 0)
-    
-    if use_finbert:
-        total_pos += row.get('FinBERT_Positive', 0)
-        total_neg += row.get('FinBERT_Negative', 0)
-    
-    # Calculate ratio (add 1 to denominator to avoid division by zero)
-    ratio = total_pos / (total_pos + total_neg + 1)
-    
-    return round(ratio, 4)
+    # Remove special characters except dots and hyphens
+    ticker = re.sub(r'[^A-Za-z0-9.\-]', '', ticker)
+    return ticker.upper().strip()
 
 
-def format_sentiment_scores(sentiment: Dict) -> str:
+def format_results(results: List[dict]) -> dict:
     """
-    Format sentiment scores for display
-    
-    Args:
-        sentiment: Sentiment dictionary with scores
-    
-    Returns:
-        Formatted string
+    Format raw results into structured summary
     """
-    if not sentiment:
-        return "N/A"
+    summary = {}
     
-    label = sentiment.get('label', 'N/A')
-    pos = sentiment.get('pos', 0)
-    neg = sentiment.get('neg', 0)
-    neu = sentiment.get('neu', 0)
+    for item in results:
+        ticker = item.get('ticker', 'UNKNOWN')
+        
+        if ticker not in summary:
+            summary[ticker] = {
+                'total_news': 0,
+                'vader': {'positive': 0, 'negative': 0, 'neutral': 0},
+                'finbert': {'positive': 0, 'negative': 0, 'neutral': 0},
+                'news_items': []
+            }
+        
+        summary[ticker]['total_news'] += 1
+        
+        # Count VADER sentiment
+        vader_sentiment = item.get('vader_sentiment', 'neutral')
+        if vader_sentiment in summary[ticker]['vader']:
+            summary[ticker]['vader'][vader_sentiment] += 1
+        
+        # Count FinBERT sentiment
+        finbert_sentiment = item.get('finbert_sentiment', 'neutral')
+        if finbert_sentiment in summary[ticker]['finbert']:
+            summary[ticker]['finbert'][finbert_sentiment] += 1
+        
+        summary[ticker]['news_items'].append(item)
     
-    return f"{label} (P:{pos:.2f}, N:{neg:.2f}, Neu:{neu:.2f})"
+    return summary
 
 
-def truncate_text(text: str, max_length: int = 100) -> str:
+def calculate_sentiment_ratio(positive: int, negative: int) -> float:
     """
-    Truncate text to specified length
-    
-    Args:
-        text: Text to truncate
-        max_length: Maximum length
-    
-    Returns:
-        Truncated text with ellipsis if needed
+    Calculate positive to negative sentiment ratio
     """
-    if len(text) <= max_length:
-        return text
-    return text[:max_length] + "..."
+    if negative == 0:
+        return float('inf') if positive > 0 else 0.0
+    return positive / negative
+
+
+def format_percentage(value: float) -> str:
+    """
+    Format value as percentage
+    """
+    return f"{value * 100:.1f}%"
