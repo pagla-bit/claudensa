@@ -7,7 +7,7 @@ import concurrent.futures
 from functools import lru_cache
 
 # Import custom modules
-from news_scrapers import scrape_finviz, scrape_yahoo, scrape_google_news
+from news_scrapers import scrape_finviz, scrape_google_news
 from sentiment_analyzer import analyze_vader_sentiment, analyze_finbert_sentiment
 from utils import validate_ticker, format_results
 
@@ -59,7 +59,6 @@ with st.sidebar:
     # News sources selection
     st.subheader("News Sources")
     use_finviz = st.checkbox("Finviz.com", value=True)
-    use_yahoo = st.checkbox("Yahoo Finance", value=True)
     use_google = st.checkbox("Google News", value=True)
     
     # News count selection
@@ -101,10 +100,10 @@ if analyze_button:
         tickers = [t.strip().upper() for t in ticker_input.replace(',', ' ').split() if t.strip()]
         tickers = list(dict.fromkeys(tickers))[:30]  # Remove duplicates and limit to 30
         
-        if not any([use_finviz, use_yahoo, use_google]):
+        if not any([use_finviz, use_google]):
             st.error("Please select at least one news source")
         else:
-            st.info(f"Analyzing {len(tickers)} ticker(s) from {sum([use_finviz, use_yahoo, use_google])} source(s)... ({news_per_source} articles per source)")
+            st.info(f"Analyzing {len(tickers)} ticker(s) from {sum([use_finviz, use_google])} source(s)... ({news_per_source} articles per source)")
             
             # Create progress tracking
             progress_bar = st.progress(0)
@@ -114,8 +113,6 @@ if analyze_button:
             sources = []
             if use_finviz:
                 sources.append(('Finviz', scrape_finviz))
-            if use_yahoo:
-                sources.append(('Yahoo Finance', scrape_yahoo))
             if use_google:
                 sources.append(('Google News', scrape_google_news))
             
@@ -252,7 +249,7 @@ if analyze_button:
                 # Create detailed display with HTML for clickable links and sentiment indicators
                 for item in filtered_results:
                     with st.container():
-                        col1, col2, col3, col4 = st.columns([3, 1, 1, 1])
+                        col1, col2, col3 = st.columns([3, 1, 1])
                         
                         with col1:
                             # Clickable headline
@@ -271,10 +268,6 @@ if analyze_button:
                             st.markdown("**FinBERT**")
                             finbert_indicator = get_sentiment_indicator(item['finbert_sentiment'])
                             st.markdown(f"{finbert_indicator} {item['finbert_score']:.3f}")
-                        
-                        with col4:
-                            if item.get('url'):
-                                st.link_button("Open", item['url'], use_container_width=True)
                         
                         st.divider()
                 
@@ -316,4 +309,4 @@ if analyze_button:
 
 # Footer
 st.markdown("---")
-st.markdown("Built with Streamlit | Data sources: Finviz, Yahoo Finance, Google News")
+st.markdown("Built with Streamlit | Data sources: Finviz, Google News")
