@@ -1,0 +1,205 @@
+import requests
+from bs4 import BeautifulSoup
+from datetime import datetime
+import time
+from typing import List, Dict
+import re
+
+# User agent to avoid blocking
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+}
+
+def scrape_finviz(ticker: str, max_articles: int = 5) -> List[Dict]:
+    """
+    Scrape news from Finviz.com
+    """
+    news_items = []
+    
+    try:
+        url = f"https://finviz.com/quote.ashx?t={ticker}"
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        news_table = soup.find('table', {'id': 'news-table'})
+        
+        if news_table:
+            rows = news_table.find_all('tr')[:max_articles]
+            
+            for row in rows:
+                try:
+                    # Get date/time
+                    date_cell = row.find('td', {'align': 'right'})
+                    date_text = date_cell.text.strip() if date_cell else 'N/A'
+                    
+                    # Get headline and link
+                    link_cell = row.find('a', {'class': 'tab-link-news'})
+                    if link_cell:
+                        headline = link_cell.text.strip()
+                        url = link_cell.get('href', '')
+                        
+                        # Try to fetch article content if URL is available
+                        content = fetch_article_content(url) if url else ''
+                        
+                        news_items.append({
+                            'source': 'Finviz',
+                            'headline': headline,
+                            'date': date_text,
+                            'url': url,
+                            'content': content
+                        })
+                except Exception as e:
+                    continue
+        
+        time.sleep(0.5)  # Be respectful to the server
+        
+    except Exception as e:
+        print(f"Error scraping Finviz for {ticker}: {str(e)}")
+    
+    return news_items
+
+
+def scrape_yahoo(ticker: str, max_articles: int = 5) -> List[Dict]:
+    """
+    Scrape news from Yahoo Finance
+    """
+    news_items = []
+    
+    try:
+        url = f"https://finance.yahoo.com/quote/{ticker}/news"
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Yahoo Finance news structure
+        articles = soup.find_all('h3', limit=max_articles)
+        
+        for article in articles:
+            try:
+                link = article.find('a')
+                if link:
+                    headline = link.text.strip()
+                    article_url = link.get('href', '')
+                    
+                    # Make URL absolute if relative
+                    if article_url.startswith('/'):
+                        article_url = f"https://finance.yahoo.com{article_url}"
+                    
+                    # Try to get date (Yahoo's structure varies)
+                    date_text = 'Recent'
+                    
+                    # Try to fetch content
+                    content = fetch_article_content(article_url) if article_url else ''
+                    
+                    news_items.append({
+                        'source': 'Yahoo Finance',
+                        'headline': headline,
+                        'date': date_text,
+                        'url': article_url,
+                        'content': content
+                    })
+            except Exception as e:
+                continue
+        
+        time.sleep(0.5)
+        
+    except Exception as e:
+        print(f"Error scraping Yahoo Finance for {ticker}: {str(e)}")
+    
+    return news_items
+
+
+def scrape_google_news(ticker: str, max_articles: int = 5) -> List[Dict]:
+    """
+    Scrape news from Google News
+    """
+    news_items = []
+    
+    try:
+        # Search Google News for ticker
+        search_query = f"{ticker} stock news"
+        url = f"https://news.google.com/search?q={search_query}&hl=en-US&gl=US&ceid=US:en"
+        
+        response = requests.get(url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Google News articles
+        articles = soup.find_all('article', limit=max_articles)
+        
+        for article in articles:
+            try:
+                # Get headline
+                headline_tag = article.find('a', {'class': 'JtKRv'})
+                if not headline_tag:
+                    headline_tag = article.find('h3') or article.find('h4')
+                
+                if headline_tag:
+                    headline = headline_tag.text.strip()
+                    article_url = headline_tag.get('href', '')
+                    
+                    # Fix Google News redirect URLs
+                    if article_url.startswith('./'):
+                        article_url = f"https://news.google.com{article_url[1:]}"
+                    
+                    # Get date/time
+                    time_tag = article.find('time')
+                    date_text = time_tag.text.strip() if time_tag else 'Recent'
+                    
+                    news_items.append({
+                        'source': 'Google News',
+                        'headline': headline,
+                        'date': date_text,
+                        'url': article_url,
+                        'content': ''  # Google News articles are behind redirects, harder to scrape
+                    })
+            except Exception as e:
+                continue
+        
+        time.sleep(0.5)
+        
+    except Exception as e:
+        print(f"Error scraping Google News for {ticker}: {str(e)}")
+    
+    return news_items
+
+
+def fetch_article_content(url: str, max_length: int = 1000) -> str:
+    """
+    Attempt to fetch article content from URL
+    Limited to first max_length characters to avoid overload
+    """
+    if not url or url.startswith('#'):
+        return ''
+    
+    try:
+        response = requests.get(url, headers=HEADERS, timeout=5)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.content, 'html.parser')
+        
+        # Remove script and style elements
+        for script in soup(['script', 'style', 'nav', 'header', 'footer']):
+            script.decompose()
+        
+        # Try common article containers
+        article_content = None
+        for selector in ['article', 'div[class*="article"]', 'div[class*="content"]', 'main']:
+            article_content = soup.find(selector)
+            if article_content:
+                break
+        
+        if article_content:
+            # Get text and clean it
+            text = article_content.get_text(separator=' ', strip=True)
+            # Remove extra whitespace
+            text = re.sub(r'\s+', ' ', text).strip()
+            return text[:max_length]
+        
+        return ''
+        
+    except Exception as e:
+        return ''
